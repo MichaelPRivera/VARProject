@@ -1,0 +1,167 @@
+---
+title: "VAR/VECM"
+author: "Michael Rivera"
+date: '2022-04-22'
+output: 
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 4
+    toc_float: no
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+graphics.off()
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+```{r packages}
+require(fpp3)
+require(tsibble)
+require(tidyverse)
+require(tidyquant)
+require(lubridate)
+require(timetk)
+require(kableExtra)
+require(dplyr)
+require(reshape2)
+require(ggplot2)
+require(vars)
+require(tsDyn)
+```
+GitHub Page: https://michaelprivera.github.io/projects.html
+
+# Executive Summary
+
+Focusing on the dynamic relationship between the two variables, Unemployment Rate (UNRATE) and Personal Saving Rate (PSAVERT), there may be a causality relationship between the two. Whether that be one-way or dual causality, analysis must be performed to discuss this matter clearly. While using over 10 years of data from each variable, it was easier to analyze such a trend between such variables. After accounting for the worries of statistical interference and the stationary element of each, the concluding data was able to determine that Personal Saving Rate does cause Unemployment Rate but the other way around, Unemployment Rate does not cause Personal Saving Rate.
+
+# Introduction
+
+Understanding the dynamic relationship between two economic variables is extremely insightful. In this case, the two variables being investigated is unemployment rate, UNRATE and Personal Saving Rate, PSAVERT. The goal of this analysis is to determine if either of these variables cause the other. There is the chance of dual causality. During this piece, the model choice that is being utilized is the Vector Autoregression model, in levels. This was determined by a unit root test to check for a unit root of 1. Through the methodology of differencing, the variables are now stationary to address a time series and understand any trends between these two variables.  
+
+# Data Usage
+
+  <dt>UNRATE</dt>
+  <dd>- Unemployment Rate - number of unemployed as a percentage of the labor force. The frequency is measured monthly and is in units of percent while being seasonally adjusted.</dd>
+  <dt>PSAVERT</dt>
+  <dd>- Personal Saving Rate - personal saving as a percentage of disposable personal income. It is calculated as the ratio of personal saving to DPI. The frequency is measured monthly and is in units of percent while being seasonally adjusted.</dd>
+
+```{r ImportData}
+varList <- c("UNRATE", "PSAVERT")
+X <- 
+    tq_get(varList, get = "economic.data", from = "1980-01-01") %>%
+    mutate(Month = yearmonth(date), value = price) %>%
+    dplyr::select(-c(date, price)) %>%
+    as_tsibble(index = Month, key = symbol)
+Xw <- X %>%
+    pivot_wider(names_from = symbol, values_from = value) %>%
+    as_tsibble() %>%
+    drop_na()
+```
+
+
+```{r plotData, include = FALSE}
+X %>% 
+  ggplot(aes(x = Month, y = value)) + 
+  geom_line() + 
+  facet_grid(vars(symbol), scales = "free_y") + 
+  labs(y = " ")
+```
+
+# Unit Root 
+
+To utilize VAR model and address the time aspect of each variable, we must difference each variable to ensure stationary variables are present. This allows for no statistical interference to cause any issues with our time series models. With the p-values of 0.01, both KPSS statistics are much greater than this critical value meaning they are non-stationary and need to be addressed.
+
+```{r UnitRoot}
+X %>% 
+  features(value, unitroot_ndiffs) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+
+
+```{r UNRATE}
+X %>% filter(symbol=="UNRATE") %>% 
+  features(value, unitroot_kpss) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+
+
+```{r PSAVERT}
+X %>% filter(symbol=="PSAVERT") %>% 
+  features(value, unitroot_kpss) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+
+
+```{r transformData, results = 'hide', include = FALSE}
+Z <- Xw %>% 
+  mutate(gPSAVERT = 100 * difference(log(PSAVERT)),   
+        gUNRATE = 100 * difference(log(UNRATE))) %>% 
+  dplyr::select(gUNRATE, gPSAVERT) %>% 
+  tidyr::drop_na()
+Z1 <- as.ts(Z, start = c(1960, 2), frequency = 12)  
+Z1
+```
+
+
+```{r order, include = 'false'}
+order <- Z1[,c(2,1)]
+tmp <- VARselect(order,lag.max = 12, type = "const")
+tmp
+```
+
+
+```{r selection, include = FALSE}
+p <- tmp$selection[2]
+```
+
+
+```{r estimate, include = 'false'}
+var.order <- VAR(order, p = p, type = "const")
+summary(var.order)
+```
+# Hypothesis Testing
+
+We must test if unemployment rate has a casual relationship with personal saving rate. Utilizing the Granger causality test, the p-value is 0.09 which is too high for a significant relationship to be determined. 
+
+```{r test}
+require(lmtest)
+cat("H0: gUNRATE does not cause gPSAVERT,  H1: It does \n")
+grangertest(gPSAVERT ~ gUNRATE, order = p, data = Z1)
+```
+We must then test if personal saving rate has a casual relationship with unemployment rate. Utilizing the Granger causality test, the p-value is 0.008 which showcases a significant causal relationship.
+
+```{r test1}
+cat("H0: gPSAVERT does not cause gUNRATE,  H1: It does \n")
+grangertest(gUNRATE ~ gPSAVERT, order = p, data = Z1)
+```
+# Orthogonal Impulse Response
+
+The Orthogonal Impulse Response from Personal Saving Rate shows that, after running the model to steady-state so that the UNRATE and PSAVERT stay where they are, if we shock the position of the PSAVERT, the UNRATE is slightly affected but over time adjusts back to its original position quite fast. If we instead shock the position of the UNRATE, the PSAVERT sees a gradual spike but ultimately returns back to its original position and continues to hover over its original position on both sides, meaning there is a slight positive impact or the impact becomes zero and/or negative over time.  
+
+```{r plot}
+plot(irf(var.order, n.ahead = 6, boot = TRUE ))
+```
+
+# Forecast Error Variance Decomposition
+
+The FEVD shows that the variance in Personal Saving Rate is independent of the variation of Unemployment Rate. However, the variance in Personal Saving Rate plays a constant role over time in regards to the Unemployment rate.
+
+```{r fevd}
+plot(fevd(var.order, n.ahead = 12))
+```
+
+# Conclusion
+The dynamic relationship between Unemployment Rate and Personal Saving Rate is quite insightful. As the unemployment rate has many indicators that influence its overall trend, it was determined that the variance in Personal Saving Rate is independent of the variation of Unemployment Rate. Through statistical analysis, it was evident that there was causality only in the direction of Personal Saving Rate on Unemployment Rate. This was later expressed in a constant impact on unemployment rate. There was about a constant 20% impact when referencing the FEVD for gUNRATE. This is quite significant as there are many factors that encompass the unemployment rate.
+
+
